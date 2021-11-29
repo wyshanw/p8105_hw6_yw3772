@@ -1,0 +1,168 @@
+---
+title: "HW6"
+author: "Yushan Wang"
+output: github_document
+---
+
+```{r setup, include = FALSE, echo = FALSE, message=FALSE}
+library(tidyverse)
+library(ggcorrplot)
+library(modelr)
+library(purrr)
+
+
+```
+
+## Problem 1
+
+### Load and clean data
+
+```{r}
+df = read.csv("data/birthweight.csv") 
+```
+
+check if there is **missing values**
+```{r}
+skimr::skim(df)$n_missing
+```
+
+There is **no missing value** for any of the variables
+
+**Convert numeric to factor** where appropriate
+```{r}
+df = 
+  df %>% mutate(
+  babysex = as.factor(babysex),
+  frace = as.factor(frace),
+  malform = as.factor(malform),
+  mrace = as.factor(mrace),
+)
+```
+
+### Propose a regression model
+
+To start with, I would like to **examine collinearity** between variables. The variable `bwt` is removed because it is the dependent variable
+```{r}
+df_cor = df %>% 
+  select(-bwt)
+
+model.matrix(~0+., data = df_cor) %>% 
+  cor(use="pairwise.complete.obs") %>% 
+  ggcorrplot(show.diag = F, type="lower", lab=TRUE, lab_size=2)
+```
+
+Based on the correlation plot:
+
+1: father's race and mother's race are highly correlated; 
+
+2: mother’s weight at delivery, mother’s pre-pregnancy weight and mother’s pre-pregnancy BMI are highly correlated; 
+
+3.baby’s head circumference at birth and baby’s length at birth are correlated.
+
+As such, the variables `frace`,`ppwt`, `bhead` will be kept. The rest of the variables will be removed due to multicollinearity.
+
+```{r}
+df_sub = df %>% 
+  select(-c(mrace, delwt, ppbmi, blength))
+```
+
+**Build preliminary model** using variables from collinearity analysis
+```{r}
+model = lm(bwt ~ ., data = df_sub)
+summary(model) %>% 
+  broom::tidy() %>% 
+  knitr::kable()
+```
+
+According to the p.value, at significant level of 0.05, the variables `fincome`, `frace3`, `frace8`, `malform`, `menarche`, `momage`, `parity` are not significant.
+
+I decide to keep `frace` variable, because some category in this variable is still significant.
+
+Therefore, the variables `fincome`, `malform`, `menarche`, `momage`, `parity` are removed for modeling.
+
+**Build final model**
+
+```{r}
+df_sub2 = df_sub %>% 
+  select(-c(fincome, malform, menarche, momage, parity))
+
+model_final = lm(bwt ~ ., data = df_sub2)
+summary(model_final) %>% 
+  broom::tidy() %>% 
+  knitr::kable()
+```
+
+**Plot of model residuals against fitted values**
+
+```{r, warning = FALSE}
+df_sub2 %>% 
+  add_predictions(model_final) %>% 
+  add_residuals(model_final) %>% 
+  ggplot(aes(x = pred, y = resid, color = pred)) +
+  labs(
+    title = "Plot of model residuals against fitted values", 
+    x = "Predicted values",
+    y = "Residuals"
+  ) + 
+  geom_point(alpha = 0.2) 
+```
+
+### Compare my model to two others
+
+Model using length at birth and gestational age as predictors:
+```{r}
+model1 = lm(bwt ~ blength + gaweeks, data = df)
+```
+
+Model using head circumference, length, sex, and all interactions (including the three-way interaction) between these
+```{r}
+model2 = lm(bwt ~ bhead + blength + babysex 
+            + bhead * blength 
+            + bhead * babysex
+            + blength * babysex
+            + bhead * blength * babysex
+              , data = df)
+
+```
+
+**Make this comparison in terms of the cross-validated prediction error**
+
+```{r}
+cv_df = 
+  crossv_mc(df, 100) %>% 
+  mutate(
+    train = map(train, as_tibble),
+    test = map(test, as_tibble))%>% 
+  mutate(
+    model_final  = map(.x = train, ~lm(bwt ~ babysex + bhead + frace + gaweeks + mheight + ppwt + smoken + wtgain, data = .x)),
+    model1  = map(.x = train, ~lm(bwt ~ blength + gaweeks, data = .x)),
+    model2  = map(.x = train, ~lm(bwt ~ bhead + blength + babysex 
+            + bhead * blength 
+            + bhead * babysex
+            + blength * babysex
+            + bhead * blength * babysex
+              , data = .x))) %>% 
+  mutate(
+    rmse_model_final = map2_dbl(model_final, test, ~rmse(model = .x, data = .y)),
+    rmse_model1 = map2_dbl(model1, test, ~rmse(model = .x, data = .y)),
+    rmse_model2 = map2_dbl(model2, test, ~rmse(model = .x, data = .y)))
+```
+
+```{r}
+cv_plot = 
+  cv_df %>% 
+  select(starts_with("rmse")) %>% 
+  pivot_longer(
+    everything(),
+    names_to = "model", 
+    values_to = "rmse",
+    names_prefix = "rmse_") %>% 
+  mutate(model = fct_inorder(model)) %>% 
+  ggplot(aes(x = model, y = rmse)) + geom_violin()
+
+cv_plot
+```
+
+It can be concluded from the violin plot and rmse values that my model fits better than the model with length at birth and gestational age as predictors; It fits worse than the model with interaction terms. The model with interaction terms fits the best among the three models due to small rmse values.
+
+##
