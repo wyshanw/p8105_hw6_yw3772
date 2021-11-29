@@ -10,7 +10,7 @@ library(ggcorrplot)
 library(modelr)
 library(purrr)
 
-
+set.seed(6)
 ```
 
 ## Problem 1
@@ -42,7 +42,7 @@ df =
 ### Propose a regression model
 
 To start with, I would like to **examine collinearity** between variables. The variable `bwt` is removed because it is the dependent variable
-```{r}
+```{r, warning = FALSE}
 df_cor = df %>% 
   select(-bwt)
 
@@ -165,4 +165,92 @@ cv_plot
 
 It can be concluded from the violin plot and rmse values that my model fits better than the model with length at birth and gestational age as predictors; It fits worse than the model with interaction terms. The model with interaction terms fits the best among the three models due to small rmse values.
 
-##
+## Problem 2
+
+load data
+```{r}
+weather_df = 
+  rnoaa::meteo_pull_monitors(
+    c("USW00094728"),
+    var = c("PRCP", "TMIN", "TMAX"), 
+    date_min = "2017-01-01",
+    date_max = "2017-12-31") %>%
+  mutate(
+    name = recode(id, USW00094728 = "CentralPark_NY"),
+    tmin = tmin / 10,
+    tmax = tmax / 10) %>%
+  select(name, id, everything())
+```
+
+### Bootstrap
+
+Use 5000 bootstrap samples and, for each bootstrap sample, produce estimates of these two quantities
+
+```{r}
+weather_boot = 
+  weather_df %>% 
+  modelr::bootstrap(n = 5000) %>% 
+  mutate(
+    models = map(strap, ~lm(tmax ~ tmin, data = .x) ),
+    results_log = map(models, broom::tidy),
+    results_r = map(models, broom::glance)
+    ) %>% 
+  select(-strap, -models) %>% 
+  unnest(results_r) %>% 
+  select(.id, results_log, r.squared) %>% 
+  unnest(results_log) %>% 
+  group_by(.id) %>% 
+  summarize(
+    r.squared = r.squared,
+    log = log(prod(estimate))
+    ) %>% 
+  unique() %>% 
+  ungroup()
+```
+
+**Distribution of r squared estimates**
+
+```{r}
+weather_boot %>% 
+  ggplot(aes(x = r.squared)) + 
+  geom_density() +
+  labs(
+    title = "Distribution of r squared esitimates",
+    x = "r squared estimates")
+```
+
+From the plot, we see that the r squared estimates mostly lays around 0.9. The distribution is left-skewed.
+
+**Distribution of log(beta0 * beta1) estimates**
+
+```{r}
+weather_boot %>% 
+  ggplot(aes(x = log)) + 
+  geom_density() +
+  labs(
+    title = "Distribution of log(beta0 * beta1) esitimates",
+    x = "log(beta0 * beta1) estimates")
+```
+
+From the plot, we see that the log(beta0 * beta1) estimates mostly lays around 2.01. It is overall normally distributed.
+
+**95% Confidence interval for r.squared**
+
+```{r}
+weather_boot %>%
+  summarise(lower = quantile(r.squared, probs = c(0.025)),
+            upper = quantile(r.squared, probs = c(0.975))
+            ) %>% 
+  knitr::kable()
+```
+
+**95% Confidence interval for log(beta0 * beta1)**
+
+```{r}
+weather_boot %>%
+  summarise(lower = quantile(log, probs = c(0.025)),
+            upper = quantile(log, probs = c(0.975))
+            )%>% 
+  knitr::kable()
+```
+
